@@ -1,0 +1,377 @@
+{
+  "id": "560c0123-a3c9-4148-b0cb-7b705dd02044",
+  "revision": 0,
+  "last_node_id": 9,
+  "last_link_id": 10,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Qwen3ASRLoader",
+      "pos": [
+        31.015860833335807,
+        -4.379546388890003
+      ],
+      "size": [
+        270,
+        178
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "QWEN3_ASR_MODEL",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "aux_id": "DarioFT/ComfyUI-Qwen3-ASR",
+        "ver": "5cdfee1b78f5b92a3f9d6baeabfb3bc688f551c4",
+        "Node name for S&R": "Qwen3ASRLoader"
+      },
+      "widgets_values": [
+        "Qwen/Qwen3-ASR-1.7B",
+        "HuggingFace",
+        "bf16",
+        "auto",
+        "None",
+        ""
+      ]
+    },
+    {
+      "id": 5,
+      "type": "PreviewAny",
+      "pos": [
+        439.96154388889096,
+        249.17299583333204
+      ],
+      "size": [
+        210,
+        166
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 3
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.10.0",
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "id": 6,
+      "type": "Qwen3Loader",
+      "pos": [
+        899.2585502500009,
+        -216.610786916668
+      ],
+      "size": [
+        270,
+        154
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "QWEN3_MODEL",
+          "links": [
+            6
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-qwen3-tts",
+        "ver": "6289ee949a75455e9fe1f90ac6d5f51445f03c73",
+        "Node name for S&R": "Qwen3Loader"
+      },
+      "widgets_values": [
+        "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        "HuggingFace",
+        "bf16",
+        "auto",
+        ""
+      ]
+    },
+    {
+      "id": 4,
+      "type": "LoadAudio",
+      "pos": [
+        441.0337383333358,
+        -206.50964305555672
+      ],
+      "size": [
+        282.83333587646484,
+        136
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "AUDIO",
+          "type": "AUDIO",
+          "links": [
+            1,
+            7
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.10.0",
+        "Node name for S&R": "LoadAudio"
+      },
+      "widgets_values": [
+        "1.wav",
+        null,
+        null
+      ]
+    },
+    {
+      "id": 2,
+      "type": "Qwen3ASRTranscribe",
+      "pos": [
+        363.4711922222244,
+        -3.1036350000012103
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "QWEN3_ASR_MODEL",
+          "link": 2
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "links": [
+            3,
+            10
+          ]
+        },
+        {
+          "name": "language",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "timestamps",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "aux_id": "DarioFT/ComfyUI-Qwen3-ASR",
+        "ver": "5cdfee1b78f5b92a3f9d6baeabfb3bc688f551c4",
+        "Node name for S&R": "Qwen3ASRTranscribe"
+      },
+      "widgets_values": [
+        "auto",
+        "",
+        false
+      ]
+    },
+    {
+      "id": 9,
+      "type": "Qwen3VoiceClone",
+      "pos": [
+        841.1541889166685,
+        -5.106494222223706
+      ],
+      "size": [
+        402.1443888888889,
+        324.5160833333333
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "QWEN3_MODEL",
+          "link": 6
+        },
+        {
+          "name": "ref_audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": 7
+        },
+        {
+          "name": "prompt",
+          "shape": 7,
+          "type": "QWEN3_PROMPT",
+          "link": null
+        },
+        {
+          "name": "ref_text",
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "ref_text"
+          },
+          "link": 10
+        }
+      ],
+      "outputs": [
+        {
+          "name": "AUDIO",
+          "type": "AUDIO",
+          "links": [
+            9
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-qwen3-tts",
+        "ver": "80a0fd71c2ed791285d552727e2a4b77e9b91a3d",
+        "Node name for S&R": "Qwen3VoiceClone"
+      },
+      "widgets_values": [
+        "The Qwen3-ASR family ASR models maintains high-quality and robust recognition under complex acoustic environments and challenging text patterns.",
+        73052475174351,
+        "randomize",
+        "Auto",
+        "",
+        2048,
+        30
+      ]
+    },
+    {
+      "id": 7,
+      "type": "PreviewAudio",
+      "pos": [
+        1307.8932808055577,
+        -3.6268658888902534
+      ],
+      "size": [
+        270,
+        88
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 9
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.10.0",
+        "Node name for S&R": "PreviewAudio"
+      },
+      "widgets_values": []
+    }
+  ],
+  "links": [
+    [
+      1,
+      4,
+      0,
+      2,
+      1,
+      "AUDIO"
+    ],
+    [
+      2,
+      1,
+      0,
+      2,
+      0,
+      "QWEN3_ASR_MODEL"
+    ],
+    [
+      3,
+      2,
+      0,
+      5,
+      0,
+      "STRING"
+    ],
+    [
+      6,
+      6,
+      0,
+      9,
+      0,
+      "QWEN3_MODEL"
+    ],
+    [
+      7,
+      4,
+      0,
+      9,
+      1,
+      "AUDIO"
+    ],
+    [
+      9,
+      9,
+      0,
+      7,
+      0,
+      "AUDIO"
+    ],
+    [
+      10,
+      2,
+      0,
+      9,
+      3,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "workflowRendererVersion": "LG",
+    "ue_links": [],
+    "ds": {
+      "scale": 0.932666649395062,
+      "offset": [
+        166.70858886110872,
+        451.1393831111121
+      ]
+    },
+    "frontendVersion": "1.37.11"
+  },
+  "version": 0.4
+}

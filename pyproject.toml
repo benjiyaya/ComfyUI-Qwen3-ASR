@@ -1,0 +1,16 @@
+[project]
+name = "comfyui-qwen3-asr"
+description = "A ComfyUI custom node suite for Qwen3-ASR, supporting speech-to-text transcription with 1.7B and 0.6B models, 52 languages/dialects, and optional timestamp alignment."
+version = "1.0.0"
+license = { text = "Apache-2.0" } 
+
+dependencies = ["qwen-asr", "modelscope", "soundfile", "numpy", "torch", "transformers", "accelerate"]
+
+[project.urls]
+Repository = "https://github.com/DarioFT/ComfyUI-Qwen3-ASR"
+Documentation = "https://github.com/DarioFT/ComfyUI-Qwen3-ASR/wiki"
+"Bug Tracker" = "https://github.com/DarioFT/ComfyUI-Qwen3-ASR/issues"
+
+[tool.comfy]
+PublisherId = "darioft"
+DisplayName = "ComfyUI-Qwen3-ASR"

@@ -1,0 +1,7 @@
+qwen-asr
+modelscope
+soundfile
+numpy
+torch
+transformers
+accelerate

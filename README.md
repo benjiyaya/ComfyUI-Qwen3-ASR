@@ -4,6 +4,10 @@ ComfyUI custom nodes for **Qwen3-ASR** (Automatic Speech Recognition) - audio-to
 
 > 🔗 Compatible with [ComfyUI-Qwen3-TTS](https://github.com/DarioFT/ComfyUI-Qwen3-TTS) for complete speech workflows
 
+<p align="center">
+    <img src="https://raw.githubusercontent.com/DarioFT/ComfyUI-Qwen3-ASR/refs/heads/main/assets/intro.png"/>
+<p>
+
 ## Features
 
 - **Multi-language**: 30 languages + 22 Chinese dialects

@@ -1,5 +1,5 @@
 [project]
-name = "comfyui-qwen3-asr"
+name = "comfyui-qwen-asr"
 description = "A ComfyUI custom node suite for Qwen3-ASR, supporting speech-to-text transcription with 1.7B and 0.6B models, 52 languages/dialects, and optional timestamp alignment."
 version = "1.0.0"
 license = { text = "Apache-2.0" } 

@@ -102,6 +102,47 @@ def load_audio_input(audio_input):
     return (wav.numpy().astype(np.float32), sr)
 
 
+
+def _chunk_audio_np(wav: np.ndarray, sr: int, chunk_s: float = 50.0, overlap_s: float = 1.0):
+    """Split mono float32 waveform into (chunk_wav, sr, offset_seconds) tuples.
+    Designed to avoid backend hard limits on long audio inputs.
+    """
+    chunk_n = int(max(1.0, float(chunk_s)) * sr)
+    overlap_n = int(max(0.0, float(overlap_s)) * sr)
+    step = max(1, chunk_n - overlap_n)
+
+    chunks = []
+    for start in range(0, len(wav), step):
+        end = min(len(wav), start + chunk_n)
+        chunk = wav[start:end].astype(np.float32, copy=False)
+        chunks.append((chunk, sr, start / float(sr)))
+        if end >= len(wav):
+            break
+    return chunks
+
+
+def _merge_overlap_words(prev_text: str, new_text: str, max_words: int = 20) -> str:
+    """Merge two texts by removing duplicated word overlap (best-effort)."""
+    prev = (prev_text or "").strip()
+    new = (new_text or "").strip()
+    if not prev:
+        return new
+    if not new:
+        return prev
+
+    pw = prev.split()
+    nw = new.split()
+    max_k = min(max_words, len(pw), len(nw))
+    best_k = 0
+    for k in range(1, max_k + 1):
+        if pw[-k:] == nw[:k]:
+            best_k = k
+    if best_k > 0:
+        merged = pw + nw[best_k:]
+        return " ".join(merged)
+    return prev + " " + new
+
+
 class Qwen3ASRLoader:
     @classmethod
     def INPUT_TYPES(s):
@@ -115,6 +156,8 @@ class Qwen3ASRLoader:
             "optional": {
                 "forced_aligner": (list(QWEN3_FORCED_ALIGNERS.keys()), {"default": "None"}),
                 "local_model_path": ("STRING", {"default": "", "multiline": False}),
+                "max_new_tokens": ("INT", {"default": 2048, "min": 64, "max": 16384, "step": 64}),
+                "max_inference_batch_size": ("INT", {"default": 32, "min": 1, "max": 256, "step": 1}),
             }
         }
 
@@ -123,7 +166,7 @@ class Qwen3ASRLoader:
     FUNCTION = "load_model"
     CATEGORY = "Qwen3-ASR"
 
-    def load_model(self, repo_id, source, precision, attention, forced_aligner="None", local_model_path=""):
+    def load_model(self, repo_id, source, precision, attention, forced_aligner="None", local_model_path="", max_new_tokens=2048, max_inference_batch_size=32):
         device = mm.get_torch_device()
         
         dtype = torch.float32
@@ -150,8 +193,8 @@ class Qwen3ASRLoader:
         model_kwargs = dict(
             dtype=dtype,
             device_map=str(device),
-            max_inference_batch_size=32,
-            max_new_tokens=256,
+            max_inference_batch_size=int(max_inference_batch_size),
+            max_new_tokens=int(max_new_tokens),
         )
         if attention != "auto":
             model_kwargs["attn_implementation"] = attention
@@ -186,6 +229,10 @@ class Qwen3ASRTranscribe:
                 "language": (SUPPORTED_LANGUAGES, {"default": "auto"}),
                 "context": ("STRING", {"default": "", "multiline": True}),
                 "return_timestamps": ("BOOLEAN", {"default": False}),
+                "chunk_seconds": ("FLOAT", {"default": 50.0, "min": 5.0, "max": 600.0, "step": 1.0}),
+                "overlap_seconds": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1}),
+                "chunk_seconds": ("FLOAT", {"default": 50.0, "min": 5.0, "max": 600.0, "step": 1.0}),
+                "overlap_seconds": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1}),
             }
         }
 
@@ -194,33 +241,73 @@ class Qwen3ASRTranscribe:
     FUNCTION = "transcribe"
     CATEGORY = "Qwen3-ASR"
 
-    def transcribe(self, model, audio, language="auto", context="", return_timestamps=False):
+    def transcribe(self, model, audio, language="auto", context="", return_timestamps=False, chunk_seconds=50.0, overlap_seconds=1.0):
         audio_data = load_audio_input(audio)
         if audio_data is None:
             return ("", "", "")
-        
+
+        wav, sr = audio_data
+        try:
+            dur = len(wav) / float(sr)
+        except Exception:
+            dur = 0.0
+
         lang = None if language == "auto" else language
-        ctx = context if context.strip() else ""
-        
-        results = model.transcribe(
-            audio=audio_data,
-            language=lang,
-            context=ctx if ctx else None,
-            return_time_stamps=return_timestamps,
-        )
-        
-        result = results[0]
-        text = result.text
-        detected_lang = result.language or ""
-        
-        timestamps_str = ""
-        if return_timestamps and result.time_stamps:
-            ts_lines = []
-            for ts in result.time_stamps:
-                ts_lines.append(f"{ts.start_time:.2f}-{ts.end_time:.2f}: {ts.text}")
-            timestamps_str = "\n".join(ts_lines)
-        
-        return (text, detected_lang, timestamps_str)
+        ctx = context.strip() if isinstance(context, str) else ""
+        ctx = ctx if ctx else None
+
+        # For short audio, do a single pass.
+        if dur <= float(chunk_seconds) + 2.0:
+            results = model.transcribe(
+                audio=audio_data,
+                language=lang,
+                context=ctx,
+                return_time_stamps=return_timestamps,
+            )
+
+            result = results[0]
+            text = result.text or ""
+            detected_lang = result.language or ""
+
+            timestamps_str = ""
+            if return_timestamps and getattr(result, "time_stamps", None):
+                ts_lines = []
+                for ts in result.time_stamps:
+                    ts_lines.append(f"{ts.start_time:.2f}-{ts.end_time:.2f}: {ts.text}")
+                timestamps_str = "\n".join(ts_lines)
+
+            return (text, detected_lang, timestamps_str)
+
+        # Long audio: chunk to avoid backend hard limits (often ~60s).
+        chunks = _chunk_audio_np(wav, sr, chunk_s=float(chunk_seconds), overlap_s=float(overlap_seconds))
+
+        merged_text = ""
+        detected_lang = ""
+        ts_lines_all = []
+
+        rolling_ctx = ctx
+        for i, (chunk_wav, chunk_sr, offset_s) in enumerate(chunks):
+            results = model.transcribe(
+                audio=(chunk_wav, chunk_sr),
+                language=lang,
+                context=rolling_ctx,
+                return_time_stamps=return_timestamps,
+            )
+            result = results[0]
+            detected_lang = detected_lang or (result.language or "")
+
+            chunk_text = (result.text or "").strip()
+            if chunk_text:
+                merged_text = _merge_overlap_words(merged_text, chunk_text, max_words=20)
+                # Keep a tiny rolling context to help continuity without exploding prompt.
+                rolling_ctx = (merged_text[-400:]) if merged_text else rolling_ctx
+
+            if return_timestamps and getattr(result, "time_stamps", None):
+                for ts in result.time_stamps:
+                    ts_lines_all.append(f"{(ts.start_time + offset_s):.2f}-{(ts.end_time + offset_s):.2f}: {ts.text}")
+
+        timestamps_str = "\n".join(ts_lines_all) if (return_timestamps and ts_lines_all) else ""
+        return (merged_text.strip(), detected_lang, timestamps_str)
 
 
 class Qwen3ASRBatchTranscribe:
@@ -234,6 +321,8 @@ class Qwen3ASRBatchTranscribe:
             "optional": {
                 "language": (SUPPORTED_LANGUAGES, {"default": "auto"}),
                 "return_timestamps": ("BOOLEAN", {"default": False}),
+                "chunk_seconds": ("FLOAT", {"default": 50.0, "min": 5.0, "max": 600.0, "step": 1.0}),
+                "overlap_seconds": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1}),
             }
         }
 
@@ -242,34 +331,56 @@ class Qwen3ASRBatchTranscribe:
     FUNCTION = "batch_transcribe"
     CATEGORY = "Qwen3-ASR"
 
-    def batch_transcribe(self, model, audio_list, language="auto", return_timestamps=False):
+    def batch_transcribe(self, model, audio_list, language="auto", return_timestamps=False, chunk_seconds=50.0, overlap_seconds=1.0):
+        # Accept single AUDIO or a list of AUDIO
         if not isinstance(audio_list, list):
             audio_list = [audio_list]
-            
-        audio_inputs = []
-        for audio in audio_list:
-            audio_data = load_audio_input(audio)
-            if audio_data:
-                audio_inputs.append(audio_data)
-        
-        if not audio_inputs:
-            return ("",)
-        
+
         lang = None if language == "auto" else language
-        languages = [lang] * len(audio_inputs) if lang else None
-        
-        results = model.transcribe(
-            audio=audio_inputs,
-            language=languages,
-            return_time_stamps=return_timestamps,
-        )
-        
+
         output_lines = []
-        for i, result in enumerate(results):
-            line = f"[{i}] ({result.language}): {result.text}"
-            output_lines.append(line)
-            if return_timestamps and result.time_stamps:
-                for ts in result.time_stamps:
-                    output_lines.append(f"    {ts.start_time:.2f}-{ts.end_time:.2f}: {ts.text}")
-        
+        for i, audio in enumerate(audio_list):
+            audio_data = load_audio_input(audio)
+            if audio_data is None:
+                output_lines.append(f"[{i}] (?): <no audio>")
+                continue
+
+            wav, sr = audio_data
+            dur = len(wav) / float(sr)
+            text_all = ""
+            ts_all = []
+
+            if dur <= float(chunk_seconds) + 2.0:
+                results = model.transcribe(
+                    audio=audio_data,
+                    language=lang,
+                    return_time_stamps=return_timestamps,
+                )
+                r = results[0]
+                text_all = (r.text or "").strip()
+                det_lang = r.language or ""
+                if return_timestamps and getattr(r, "time_stamps", None):
+                    for ts in r.time_stamps:
+                        ts_all.append(f"    {ts.start_time:.2f}-{ts.end_time:.2f}: {ts.text}")
+            else:
+                chunks = _chunk_audio_np(wav, sr, chunk_s=float(chunk_seconds), overlap_s=float(overlap_seconds))
+                det_lang = ""
+                for (chunk_wav, chunk_sr, offset_s) in chunks:
+                    results = model.transcribe(
+                        audio=(chunk_wav, chunk_sr),
+                        language=lang,
+                        return_time_stamps=return_timestamps,
+                    )
+                    r = results[0]
+                    det_lang = det_lang or (r.language or "")
+                    text_all = _merge_overlap_words(text_all, (r.text or "").strip(), max_words=20)
+
+                    if return_timestamps and getattr(r, "time_stamps", None):
+                        for ts in r.time_stamps:
+                            ts_all.append(f"    {(ts.start_time + offset_s):.2f}-{(ts.end_time + offset_s):.2f}: {ts.text}")
+
+            output_lines.append(f"[{i}] ({det_lang}): {text_all}")
+            if ts_all:
+                output_lines.extend(ts_all)
+
         return ("\n".join(output_lines),)

@@ -4,9 +4,14 @@ ComfyUI custom nodes for **Qwen3-ASR** (Automatic Speech Recognition) - audio-to
 
 > 🔗 Compatible with [ComfyUI-Qwen3-TTS](https://github.com/DarioFT/ComfyUI-Qwen3-TTS) for complete speech workflows
 
-<p align="center">
-    <img src="https://raw.githubusercontent.com/DarioFT/ComfyUI-Qwen3-ASR/refs/heads/main/assets/intro.png"/>
-<p>
+
+**This edition, we added chunk and overlap seconds for Qwen3-ASR Transcribe node. This avoid users lose some length at the end of the audio.**
+
+<img width="848" height="968" alt="image" src="https://github.com/user-attachments/assets/c59aa652-d32e-4c4e-b6d3-8d0a8c28156d" />
+
+
+
+
 
 ## Features
 

@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+import re
+import time
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+from PIL import Image, ImageDraw, ImageFont
+
+
 import os
 import shutil
 import torch
@@ -10,6 +19,386 @@ from qwen_asr import Qwen3ASRModel
 QWEN3_ASR_MODELS_DIR = os.path.join(folder_paths.models_dir, "Qwen3-ASR")
 os.makedirs(QWEN3_ASR_MODELS_DIR, exist_ok=True)
 folder_paths.add_model_folder_path("Qwen3-ASR", QWEN3_ASR_MODELS_DIR)
+
+
+
+# -----------------------------
+# Color presets (dropdown)
+# -----------------------------
+
+COLOR_PRESETS = {
+    "White": (255, 255, 255),
+    "Yellow": (255, 235, 59),
+    "Cyan": (0, 255, 255),
+    "Green": (76, 175, 80),
+    "Red": (244, 67, 54),
+    "Orange": (255, 152, 0),
+    "Blue": (33, 150, 243),
+    "Magenta": (233, 30, 99),
+    "Light Gray": (220, 220, 220),
+    "Black": (0, 0, 0),
+}
+
+
+# -----------------------------
+# Parsing
+# -----------------------------
+
+LINE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*:\s*(.+?)\s*$")
+
+
+@dataclass
+class WordStamp:
+    start: float
+    end: float
+    word: str
+
+
+@dataclass
+class Caption:
+    start: float
+    end: float
+    text: str
+
+
+def parse_word_timestamps(text: str) -> List[WordStamp]:
+    words: List[WordStamp] = []
+    for raw_line in (text or "").splitlines():
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        m = LINE_RE.match(raw_line)
+        if not m:
+            continue
+        start = float(m.group(1))
+        end = float(m.group(2))
+        word = m.group(3).strip()
+        if not word:
+            continue
+        if end < start:
+            start, end = end, start
+        words.append(WordStamp(start=start, end=end, word=word))
+    words.sort(key=lambda w: (w.start, w.end))
+    return words
+
+
+def build_captions(
+    words: List[WordStamp],
+    gap_threshold: float = 0.35,
+    max_chars: int = 42,
+    max_caption_duration: float = 3.5,
+) -> List[Caption]:
+    if not words:
+        return []
+
+    captions: List[Caption] = []
+
+    cur_words: List[str] = []
+    cur_start = words[0].start
+    cur_end = words[0].end
+
+    def flush():
+        nonlocal cur_words, cur_start, cur_end
+        txt = " ".join(cur_words).strip()
+        if txt:
+            captions.append(Caption(start=cur_start, end=cur_end, text=txt))
+        cur_words = []
+
+    cur_words.append(words[0].word)
+
+    for i in range(1, len(words)):
+        w = words[i]
+        prev = words[i - 1]
+        gap = w.start - prev.end
+
+        next_text = (" ".join(cur_words + [w.word])).strip()
+        next_duration = max(cur_end, w.end) - cur_start
+
+        should_break = False
+        if gap > gap_threshold:
+            should_break = True
+        elif len(next_text) > max_chars:
+            should_break = True
+        elif next_duration > max_caption_duration:
+            should_break = True
+
+        if should_break:
+            flush()
+            cur_start = w.start
+            cur_end = w.end
+            cur_words.append(w.word)
+        else:
+            cur_words.append(w.word)
+            cur_end = max(cur_end, w.end)
+
+    flush()
+    return captions
+
+
+def caption_for_time(captions: List[Caption], t: float) -> Optional[str]:
+    for c in captions:
+        if c.start <= t < c.end:
+            return c.text
+        if c.start > t:
+            break
+    return None
+
+
+# -----------------------------
+# Fonts
+# -----------------------------
+
+def get_default_font(size: int) -> ImageFont.FreeTypeFont:
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", size=size)
+    except Exception:
+        try:
+            return ImageFont.truetype("arial.ttf", size=size)
+        except Exception:
+            return ImageFont.load_default()
+
+
+# -----------------------------
+# Overlay rendering (PIL) -> Torch RGBA
+# -----------------------------
+
+def render_subtitle_overlay_rgba(
+    size_wh: Tuple[int, int],
+    text: str,
+    font_size: int,
+    bottom_margin: int,
+    max_width_ratio: float,
+    outline: int,
+    text_color: Tuple[int, int, int],
+) -> Image.Image:
+    """
+    Returns a PIL RGBA image (same size as frame) with ONLY the subtitle drawn.
+    Background is transparent (alpha=0).
+    """
+    W, H = size_wh
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font = get_default_font(font_size)
+
+    max_width = int(W * max_width_ratio)
+
+    def text_width(s: str) -> int:
+        bbox = draw.textbbox((0, 0), s, font=font)
+        return bbox[2] - bbox[0]
+
+    # Wrap into multiple centered lines
+    words = text.split()
+    lines: List[str] = []
+    cur = ""
+    for w in words:
+        cand = (cur + " " + w).strip()
+        if cur and text_width(cand) > max_width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = cand
+    if cur:
+        lines.append(cur)
+
+    # Compute total height
+    line_heights = []
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_heights.append(bbox[3] - bbox[1])
+    line_gap = max(6, font_size // 6)
+    total_h = sum(line_heights) + line_gap * (len(lines) - 1)
+
+    y = H - bottom_margin - total_h
+    y = max(10, y)
+
+    # Draw outline + fill (with alpha 255)
+    fill_rgba = (text_color[0], text_color[1], text_color[2], 255)
+    outline_rgba = (0, 0, 0, 255)
+
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        x = (W - w) // 2
+
+        if outline > 0:
+            for ox in range(-outline, outline + 1):
+                for oy in range(-outline, outline + 1):
+                    if ox == 0 and oy == 0:
+                        continue
+                    draw.text((x + ox, y + oy), line, font=font, fill=outline_rgba)
+
+        draw.text((x, y), line, font=font, fill=fill_rgba)
+        y += h + line_gap
+
+    return overlay
+
+
+def pil_rgba_to_torch(overlay_rgba: Image.Image, device: torch.device) -> torch.Tensor:
+    """
+    Returns torch float tensor (H,W,4) in 0..1 on requested device.
+    """
+    arr = np.array(overlay_rgba).astype(np.float32) / 255.0  # (H,W,4)
+    t = torch.from_numpy(arr).to(device=device)
+    return t
+
+
+
+# -----------------------------
+# ComfyUI Node
+# -----------------------------
+
+class SubtitleBurnIn:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "text_timestamps": ("STRING", {"multiline": True, "default": ""}),
+                "fps": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 240.0, "step": 0.1}),
+                "text_color": (list(COLOR_PRESETS.keys()),),
+            },
+            "optional": {
+                "gap_threshold": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "max_chars": ("INT", {"default": 42, "min": 10, "max": 120, "step": 1}),
+                "max_caption_duration": ("FLOAT", {"default": 3.5, "min": 0.5, "max": 10.0, "step": 0.1}),
+                "font_size": ("INT", {"default": 42, "min": 10, "max": 140, "step": 1}),
+                "bottom_margin": ("INT", {"default": 40, "min": 0, "max": 300, "step": 1}),
+                "outline": ("INT", {"default": 3, "min": 0, "max": 12, "step": 1}),
+                "max_width_ratio": ("FLOAT", {"default": 0.92, "min": 0.5, "max": 0.99, "step": 0.01}),
+                "log_every_seconds": ("FLOAT", {"default": 2.0, "min": 0.1, "max": 60.0, "step": 0.1}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("images",)
+    FUNCTION = "burn_in"
+    CATEGORY = "video/subtitles"
+
+    def burn_in(
+        self,
+        images: torch.Tensor,
+        text_timestamps: str,
+        fps: float,
+        text_color: str,
+        gap_threshold: float = 0.35,
+        max_chars: int = 42,
+        max_caption_duration: float = 3.5,
+        font_size: int = 42,
+        bottom_margin: int = 40,
+        outline: int = 3,
+        max_width_ratio: float = 0.92,
+        log_every_seconds: float = 2.0,
+    ):
+        if images is None or not isinstance(images, torch.Tensor) or images.ndim != 4:
+            raise ValueError("Expected 'images' as a ComfyUI IMAGE batch tensor with shape (B,H,W,C).")
+
+        words = parse_word_timestamps(text_timestamps)
+        captions = build_captions(
+            words,
+            gap_threshold=float(gap_threshold),
+            max_chars=int(max_chars),
+            max_caption_duration=float(max_caption_duration),
+        )
+
+        if not captions:
+            print("[SubtitleBurnIn] No captions to draw -> passthrough")
+            return (images,)
+
+        device = images.device
+        color_rgb = COLOR_PRESETS.get(text_color, (255, 255, 255))
+
+        B, H, W, C = images.shape
+        if C != 3:
+            raise ValueError(f"Expected RGB images (C=3). Got C={C}.")
+
+        images_f = images.float()
+
+        # ---- logging ----
+        start_time = time.time()
+        next_log_time = start_time + float(log_every_seconds)
+        total_seconds = B / float(fps) if fps > 0 else 0.0
+        print(
+            f"[SubtitleBurnIn] Start: {B} frames ({total_seconds:.2f}s) @ {fps:.3f} fps | "
+            f"captions={len(captions)} | color={text_color} | log_every={log_every_seconds:.1f}s | mode=cache+gpu_blend"
+        )
+
+        # ---- overlay cache ----
+        # Keyed by caption text + relevant render params (so changing font/outline/color regenerates)
+        overlay_cache: Dict[Tuple, Tuple[torch.Tensor, torch.Tensor]] = {}
+        # value = (overlay_rgb(H,W,3), alpha(H,W,1)) on GPU
+
+        out: List[torch.Tensor] = []
+
+        for i in range(B):
+            t = float(i) / float(fps)
+            cap = caption_for_time(captions, t)
+
+            if not cap:
+                out.append(images_f[i])
+            else:
+                key = (
+                    cap,
+                    W,
+                    H,
+                    int(font_size),
+                    int(bottom_margin),
+                    float(max_width_ratio),
+                    int(outline),
+                    color_rgb,
+                )
+
+                cached = overlay_cache.get(key)
+                if cached is None:
+                    # Render overlay in PIL (RGBA) once for this caption+params
+                    overlay_pil = render_subtitle_overlay_rgba(
+                        (W, H),
+                        cap,
+                        font_size=int(font_size),
+                        bottom_margin=int(bottom_margin),
+                        max_width_ratio=float(max_width_ratio),
+                        outline=int(outline),
+                        text_color=color_rgb,
+                    )
+                    overlay_t = pil_rgba_to_torch(overlay_pil, device=device)  # (H,W,4) float 0..1
+                    overlay_rgb_t = overlay_t[..., :3]  # (H,W,3)
+                    alpha_t = overlay_t[..., 3:4]       # (H,W,1)
+                    overlay_cache[key] = (overlay_rgb_t, alpha_t)
+                    overlay_rgb, alpha = overlay_rgb_t, alpha_t
+                else:
+                    overlay_rgb, alpha = cached
+
+                # GPU blend: out = frame*(1-a) + overlay_rgb*a
+                frame = images_f[i]
+                a = alpha
+                blended = frame * (1.0 - a) + overlay_rgb * a
+                out.append(blended)
+
+            # ---- timed progress log ----
+            done = i + 1
+            now = time.time()
+            if done == 1 or done == B or (log_every_seconds > 0 and now >= next_log_time):
+                elapsed = now - start_time
+                fps_eff = (done / elapsed) if elapsed > 0 else 0.0
+                remaining = B - done
+                eta_s = (remaining / fps_eff) if fps_eff > 0 else 0.0
+                pct = (done * 100.0) / B
+                video_t = done / float(fps) if fps > 0 else 0.0
+                print(
+                    f"[SubtitleBurnIn] {done}/{B} ({pct:.1f}%) | "
+                    f"{fps_eff:.2f} frames/s | ETA {eta_s:.1f}s | video {video_t:.2f}s/{total_seconds:.2f}s | "
+                    f"cache={len(overlay_cache)}"
+                )
+                next_log_time = now + float(log_every_seconds)
+
+        out_t = torch.stack(out, dim=0).to(device)
+
+        total = time.time() - start_time
+        print(f"[SubtitleBurnIn] Done: {B} frames in {total:.2f}s ({(B/total if total>0 else 0):.2f} frames/s) | cache={len(overlay_cache)}")
+
+        return (out_t,)
+
+
 
 # Model repo mappings
 QWEN3_ASR_MODELS = {

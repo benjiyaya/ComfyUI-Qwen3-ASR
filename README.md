@@ -11,6 +11,11 @@ ComfyUI custom nodes for **Qwen3-ASR** (Automatic Speech Recognition) - audio-to
 
 
 
+**Added Qwen3-ASR Subtitle To Video Node**
+
+![{CFF30C53-DAD8-40EA-A866-53375C11BC44} png](https://github.com/user-attachments/assets/512a2a53-ace3-4e47-9319-c172be0fa042)
+
+
 
 
 ## Features
